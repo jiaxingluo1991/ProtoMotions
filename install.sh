@@ -40,14 +40,14 @@ CONDA_BASE="$("$CONDA_BIN" info --base)"
 # shellcheck disable=SC1091
 source "$CONDA_BASE/etc/profile.d/conda.sh"
 
-echo "[1/6] Using conda at: $CONDA_BIN"
+echo "[1/7] Using conda at: $CONDA_BIN"
 echo "      Target env:     $ENV_NAME (python $PY_VERSION)"
 
 # ----- create / reuse env --------------------------------------------------
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
-    echo "[2/6] Env '$ENV_NAME' already exists, reusing."
+    echo "[2/7] Env '$ENV_NAME' already exists, reusing."
 else
-    echo "[2/6] Creating env '$ENV_NAME'..."
+    echo "[2/7] Creating env '$ENV_NAME'..."
     conda create -y -n "$ENV_NAME" "python=$PY_VERSION" pip
 fi
 conda activate "$ENV_NAME"
@@ -57,14 +57,39 @@ if [[ "${CONDA_DEFAULT_ENV:-}" != "$ENV_NAME" ]]; then
 fi
 python -m pip install --upgrade pip
 
+# ----- Git LFS objects -----------------------------------------------------
+# Pretrained checkpoints + resolved configs live in Git LFS. Without these,
+# start.sh fails with "_pickle.UnpicklingError: invalid load key, 'v'."
+# (pickle reading the LFS pointer text instead of the real file). Override
+# scope via LFS_INCLUDE; set LFS_SKIP=1 to skip entirely.
+echo "[3/7] Fetching Git LFS objects..."
+LFS_INCLUDE="${LFS_INCLUDE:-data/pretrained_models/motion_tracker/g1-bones-deploy/**,data/motion_for_trackers/**}"
+if [[ "${LFS_SKIP:-0}" == "1" ]]; then
+    echo "      LFS_SKIP=1 set, skipping."
+elif [[ ! -d "$REPO_ROOT/.git" ]]; then
+    echo "      WARNING: $REPO_ROOT is not a git checkout — skipping LFS pull." >&2
+    echo "               Pretrained models must be downloaded manually." >&2
+elif ! command -v git-lfs >/dev/null 2>&1; then
+    echo "ERROR: git-lfs not installed. Install it first:" >&2
+    echo "       sudo apt install -y git-lfs" >&2
+    echo "       then re-run this script (or set LFS_SKIP=1 to skip)." >&2
+    exit 1
+else
+    git lfs install --local
+    if ! git lfs pull --include="$LFS_INCLUDE"; then
+        echo "      WARNING: 'git lfs pull' failed (network?). Re-run later" >&2
+        echo "               or download checkpoints manually before ./start.sh." >&2
+    fi
+fi
+
 # ----- build tools (openmesh wheel build needs cmake) ----------------------
 # Pin cmake < 4: openmesh 1.2.1's CMakeLists.txt declares a minimum < 3.5,
 # which CMake 4 rejected when it dropped that compatibility shim.
-echo "[3/6] Installing build tools (cmake<4) into env..."
+echo "[4/7] Installing build tools (cmake<4) into env..."
 conda install -y -c conda-forge "cmake<4" make
 
 # ----- CPU PyTorch ---------------------------------------------------------
-echo "[4/6] Installing PyTorch (CPU)..."
+echo "[5/7] Installing PyTorch (CPU)..."
 TORCH_PIP_ARGS=(--index-url "https://download.pytorch.org/whl/cpu")
 if [[ -n "$PYPI_EXTRA_INDEX" ]]; then
     TORCH_PIP_ARGS+=(--extra-index-url "$PYPI_EXTRA_INDEX")
@@ -73,7 +98,7 @@ python -m pip install "${PIP_NET_FLAGS[@]}" "${TORCH_PIP_ARGS[@]}" \
     torch torchvision torchaudio
 
 # ----- ProtoMotions + MuJoCo deps ------------------------------------------
-echo "[5/6] Installing ProtoMotions (editable) + MuJoCo requirements..."
+echo "[6/7] Installing ProtoMotions (editable) + MuJoCo requirements..."
 cd "$REPO_ROOT"
 EXTRA_ARGS=()
 if [[ -n "$PYPI_EXTRA_INDEX" ]]; then
@@ -83,7 +108,7 @@ python -m pip install "${PIP_NET_FLAGS[@]}" "${EXTRA_ARGS[@]}" -e .
 python -m pip install "${PIP_NET_FLAGS[@]}" "${EXTRA_ARGS[@]}" -r requirements_mujoco.txt
 
 # ----- pre-package bundled kimodo example motions --------------------------
-echo "[6/6] Packaging bundled kimodo example motions into a MotionLib..."
+echo "[7/7] Packaging bundled kimodo example motions into a MotionLib..."
 KIMODO_PROTO_DIR="$REPO_ROOT/data/g1-kimodo-generated/proto"
 KIMODO_PT="$REPO_ROOT/data/g1-kimodo-generated/kimodo_g1_bundled.pt"
 if [[ ! -d "$KIMODO_PROTO_DIR" ]]; then
